@@ -1,0 +1,437 @@
+// Prisma Schema for OpPortal - Operation Management System
+// Supports PostgreSQL with soft delete, foreign keys, and workflow status fields
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================
+// ENUMS
+// ============================================
+
+enum UserStatus {
+  ACTIVE
+  INACTIVE
+  SUSPENDED
+}
+
+enum OrganizationType {
+  TTVH        // Top-level operation center
+  BCVH        // Belongs to TTVH
+  BCP         // Belongs to BCVH
+  DEPARTMENT  // Belongs to BCVH or BCP
+}
+
+enum ShiftStatus {
+  DRAFT
+  ASSIGNED
+  ACTIVE
+  COMPLETED
+  LOCKED
+}
+
+enum AttendanceStatus {
+  PENDING
+  CONFIRMED
+  ADJUSTED
+  LOCKED
+}
+
+enum KPIType {
+  ASSIGNED
+  SELF_REGISTERED
+}
+
+enum KPIPeriod {
+  WEEKLY
+  MONTHLY
+  QUARTERLY
+}
+
+enum KPIStatus {
+  DRAFT
+  SUBMITTED
+  APPROVED
+  IN_PROGRESS
+  EVALUATED
+  CLOSED
+}
+
+enum ApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum ActionType {
+  CREATE
+  UPDATE
+  DELETE
+  APPROVE
+  REJECT
+  LOCK
+  UNLOCK
+}
+
+// ============================================
+// CORE ENTITIES
+// ============================================
+
+model User {
+  id                  String              @id @default(cuid())
+  email               String              @unique
+  username            String              @unique
+  password            String
+  name                String
+  phone               String?
+  avatar              String?
+  status              UserStatus          @default(ACTIVE)
+  
+  // Role relationship
+  roleId              String
+  role                Role                @relation(fields: [roleId], references: [id])
+  
+  // Organization relationship
+  organizationUnitId  String
+  organizationUnit    OrganizationUnit    @relation(fields: [organizationUnitId], references: [id])
+  
+  // Timestamps & Soft Delete
+  createdAt           DateTime            @default(now())
+  updatedAt           DateTime            @updatedAt
+  deletedAt           DateTime?
+  
+  // Relations
+  shiftAssignments    ShiftAssignment[]
+  attendances         Attendance[]
+  kpis                KPI[]               @relation("UserKPIs")
+  evaluationsGiven    KPIEvaluation[]     @relation("Evaluator")
+  approvalsMade       ApprovalRequest[]   @relation("Approver")
+  approvalsRequested  ApprovalRequest[]   @relation("Requester")
+  auditLogs           AuditLog[]
+  
+  @@index([email])
+  @@index([organizationUnitId])
+  @@index([roleId])
+  @@map("users")
+}
+
+model Role {
+  id          String       @id @default(cuid())
+  name        String       @unique    // Admin, Manager, Leader, User
+  description String?
+  level       Int          @default(0) // Hierarchy level: Admin=0, Manager=1, Leader=2, User=3
+  
+  // Timestamps
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+  
+  // Relations
+  users       User[]
+  permissions RolePermission[]
+  
+  @@map("roles")
+}
+
+model Permission {
+  id          String           @id @default(cuid())
+  action      String           // View, Create, Update, Delete, Approve, Lock
+  resource    String           // Users, Shifts, Attendance, KPI, etc.
+  scope       String           @default("PERSONAL") // TTVH, BCVH, BCP, DEPARTMENT, PERSONAL
+  description String?
+  
+  // Timestamps
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+  
+  // Relations
+  roles       RolePermission[]
+  
+  @@unique([action, resource, scope])
+  @@map("permissions")
+}
+
+model RolePermission {
+  id           String     @id @default(cuid())
+  roleId       String
+  permissionId String
+  
+  role         Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission   Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+  
+  @@unique([roleId, permissionId])
+  @@map("role_permissions")
+}
+
+// ============================================
+// ORGANIZATION HIERARCHY
+// ============================================
+
+model OrganizationUnit {
+  id          String            @id @default(cuid())
+  code        String            @unique
+  name        String
+  type        OrganizationType
+  address     String?
+  phone       String?
+  
+  // Parent relationship (for hierarchy)
+  parentId    String?
+  parent      OrganizationUnit? @relation("OrgHierarchy", fields: [parentId], references: [id])
+  children    OrganizationUnit[] @relation("OrgHierarchy")
+  
+  // Timestamps & Soft Delete
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+  deletedAt   DateTime?
+  
+  // Relations
+  users       User[]
+  shifts      Shift[]
+  
+  @@index([parentId])
+  @@index([type])
+  @@map("organization_units")
+}
+
+// ============================================
+// SHIFT MANAGEMENT
+// ============================================
+
+model Shift {
+  id                  String            @id @default(cuid())
+  name                String
+  code                String
+  startTime           String            // Format: HH:mm
+  endTime             String            // Format: HH:mm
+  breakMinutes        Int               @default(0)
+  status              ShiftStatus       @default(DRAFT)
+  description         String?
+  
+  // Organization relationship
+  organizationUnitId  String
+  organizationUnit    OrganizationUnit  @relation(fields: [organizationUnitId], references: [id])
+  
+  // Timestamps & Soft Delete
+  createdAt           DateTime          @default(now())
+  updatedAt           DateTime          @updatedAt
+  deletedAt           DateTime?
+  
+  // Relations
+  assignments         ShiftAssignment[]
+  
+  @@unique([code, organizationUnitId])
+  @@index([organizationUnitId])
+  @@map("shifts")
+}
+
+model ShiftAssignment {
+  id          String      @id @default(cuid())
+  date        DateTime    @db.Date
+  notes       String?
+  status      ShiftStatus @default(ASSIGNED)
+  
+  // User relationship
+  userId      String
+  user        User        @relation(fields: [userId], references: [id])
+  
+  // Shift relationship
+  shiftId     String
+  shift       Shift       @relation(fields: [shiftId], references: [id])
+  
+  // Timestamps
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+  
+  // Relations
+  attendance  Attendance?
+  
+  // Prevent duplicate assignments
+  @@unique([userId, date, shiftId])
+  @@index([userId])
+  @@index([shiftId])
+  @@index([date])
+  @@map("shift_assignments")
+}
+
+// ============================================
+// ATTENDANCE MANAGEMENT
+// ============================================
+
+model Attendance {
+  id                  String            @id @default(cuid())
+  date                DateTime          @db.Date
+  checkIn             DateTime?
+  checkOut            DateTime?
+  workingMinutes      Int               @default(0)
+  overtimeMinutes     Int               @default(0)
+  status              AttendanceStatus  @default(PENDING)
+  notes               String?
+  adjustmentReason    String?
+  
+  // User relationship
+  userId              String
+  user                User              @relation(fields: [userId], references: [id])
+  
+  // Shift assignment relationship (optional - for matching)
+  shiftAssignmentId   String?           @unique
+  shiftAssignment     ShiftAssignment?  @relation(fields: [shiftAssignmentId], references: [id])
+  
+  // Timestamps
+  createdAt           DateTime          @default(now())
+  updatedAt           DateTime          @updatedAt
+  
+  // One attendance per user per day
+  @@unique([userId, date])
+  @@index([userId])
+  @@index([date])
+  @@index([status])
+  @@map("attendances")
+}
+
+// ============================================
+// KPI MANAGEMENT
+// ============================================
+
+model KPI {
+  id              String          @id @default(cuid())
+  title           String
+  type            KPIType
+  period          KPIPeriod
+  startDate       DateTime        @db.Date
+  endDate         DateTime        @db.Date
+  totalWeight     Decimal         @default(0) @db.Decimal(5, 2) // Must equal 100
+  status          KPIStatus       @default(DRAFT)
+  notes           String?
+  
+  // User relationship
+  userId          String
+  user            User            @relation("UserKPIs", fields: [userId], references: [id])
+  
+  // Timestamps
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+  
+  // Relations
+  items           KPIItem[]
+  evaluations     KPIEvaluation[]
+  
+  @@index([userId])
+  @@index([period])
+  @@index([status])
+  @@map("kpis")
+}
+
+model KPIItem {
+  id              String    @id @default(cuid())
+  description     String
+  weight          Decimal   @db.Decimal(5, 2)  // Percentage of total
+  target          String                        // Target value/goal
+  actualValue     String?                       // Actual achieved value
+  score           Decimal?  @db.Decimal(5, 2)  // 0-100 score
+  notes           String?
+  
+  // KPI relationship
+  kpiId           String
+  kpi             KPI       @relation(fields: [kpiId], references: [id], onDelete: Cascade)
+  
+  // Timestamps
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  
+  @@index([kpiId])
+  @@map("kpi_items")
+}
+
+model KPIEvaluation {
+  id              String    @id @default(cuid())
+  overallScore    Decimal   @db.Decimal(5, 2)
+  comments        String?
+  bonusPercentage Decimal?  @db.Decimal(5, 2)
+  
+  // KPI relationship
+  kpiId           String
+  kpi             KPI       @relation(fields: [kpiId], references: [id], onDelete: Cascade)
+  
+  // Evaluator relationship
+  evaluatorId     String
+  evaluator       User      @relation("Evaluator", fields: [evaluatorId], references: [id])
+  
+  // Timestamps
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  
+  @@unique([kpiId, evaluatorId])
+  @@index([kpiId])
+  @@index([evaluatorId])
+  @@map("kpi_evaluations")
+}
+
+// ============================================
+// APPROVAL WORKFLOW
+// ============================================
+
+model ApprovalRequest {
+  id              String          @id @default(cuid())
+  entityType      String          // Attendance, Shift, KPI
+  entityId        String
+  action          String          // Adjustment, Assignment, Registration, Evaluation
+  status          ApprovalStatus  @default(PENDING)
+  reason          String?
+  rejectionReason String?
+  
+  // Metadata
+  beforeData      Json?
+  afterData       Json?
+  
+  // Requester relationship
+  requesterId     String
+  requester       User            @relation("Requester", fields: [requesterId], references: [id])
+  
+  // Approver relationship
+  approverId      String?
+  approver        User?           @relation("Approver", fields: [approverId], references: [id])
+  
+  // Timestamps
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+  approvedAt      DateTime?
+  
+  @@index([entityType, entityId])
+  @@index([requesterId])
+  @@index([approverId])
+  @@index([status])
+  @@map("approval_requests")
+}
+
+// ============================================
+// AUDIT LOGGING
+// ============================================
+
+model AuditLog {
+  id          String     @id @default(cuid())
+  action      ActionType
+  entityType  String     // Table/model name
+  entityId    String
+  beforeData  Json?
+  afterData   Json?
+  ipAddress   String?
+  userAgent   String?
+  
+  // Actor relationship
+  actorId     String
+  actor       User       @relation(fields: [actorId], references: [id])
+  actorRole   String     // Role name at the time of action
+  
+  // Timestamp
+  createdAt   DateTime   @default(now())
+  
+  @@index([actorId])
+  @@index([entityType, entityId])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
