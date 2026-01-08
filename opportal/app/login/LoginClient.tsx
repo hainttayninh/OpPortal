@@ -1,15 +1,14 @@
 'use client';
 
-import React, { Suspense } from 'react';
-import { useRouter, useSearchParams } from 'next/navigation';
+import React from 'react';
+import { useRouter } from 'next/navigation';
 import { Button, Input, Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui';
 import { useAuthStore } from '@/store/auth-store';
 import { Eye, EyeOff, LogIn } from 'lucide-react';
 
-// The form component that uses useSearchParams (must be wrapped in Suspense)
+// The form component - uses client-side URL parsing instead of useSearchParams
 function LoginForm() {
     const router = useRouter();
-    const searchParams = useSearchParams();
     const { setUser } = useAuthStore();
 
     const [formData, setFormData] = React.useState({
@@ -45,8 +44,12 @@ function LoginForm() {
             // Set user in store
             setUser(data.user);
 
-            // Redirect to intended page or dashboard
-            const redirect = searchParams.get('redirect') || '/dashboard';
+            // Get redirect from URL using client-side parsing (avoids useSearchParams SSR issues)
+            let redirect = '/dashboard';
+            if (typeof window !== 'undefined') {
+                const params = new URLSearchParams(window.location.search);
+                redirect = params.get('redirect') || '/dashboard';
+            }
             router.push(redirect);
         } catch (err) {
             setError('Có lỗi xảy ra. Vui lòng thử lại.');
@@ -134,23 +137,6 @@ function LoginForm() {
     );
 }
 
-// Loading fallback for Suspense
-function LoginFormFallback() {
-    return (
-        <Card className="relative w-full max-w-md border-slate-700 bg-white/95 backdrop-blur-sm shadow-2xl">
-            <CardContent className="p-8 flex items-center justify-center">
-                <div className="flex flex-col items-center gap-4">
-                    <svg className="animate-spin h-8 w-8 text-blue-600" viewBox="0 0 24 24">
-                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
-                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                    </svg>
-                    <p className="text-slate-500">Đang tải...</p>
-                </div>
-            </CardContent>
-        </Card>
-    );
-}
-
 // Main login page content - exported for use by server component
 export default function LoginPageContent() {
     return (
@@ -162,10 +148,8 @@ export default function LoginPageContent() {
             <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-blue-500/20 rounded-full blur-3xl" />
             <div className="absolute bottom-1/4 right-1/4 w-96 h-96 bg-purple-500/20 rounded-full blur-3xl" />
 
-            {/* Form wrapped in Suspense */}
-            <Suspense fallback={<LoginFormFallback />}>
-                <LoginForm />
-            </Suspense>
+            {/* Form */}
+            <LoginForm />
         </div>
     );
 }
