@@ -27,6 +27,9 @@ import {
 import { Plus, Search, Edit, Trash2, UserPlus } from 'lucide-react';
 import { useAuthStore } from '@/store/auth-store';
 
+// Force dynamic rendering to avoid build-time errors
+export const dynamic = 'force-dynamic';
+
 interface User {
     id: string;
     email: string;

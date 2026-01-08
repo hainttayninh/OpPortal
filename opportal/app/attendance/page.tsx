@@ -17,6 +17,9 @@ import {
 import { ClipboardCheck, Clock, CheckCircle, Lock } from 'lucide-react';
 import { useAuthStore } from '@/store/auth-store';
 
+// Force dynamic rendering to avoid build-time errors
+export const dynamic = 'force-dynamic';
+
 interface Attendance {
     id: string;
     date: string;

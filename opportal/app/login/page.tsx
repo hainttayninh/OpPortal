@@ -6,6 +6,9 @@ import { Button, Input, Card, CardContent, CardHeader, CardTitle, CardDescriptio
 import { useAuthStore } from '@/store/auth-store';
 import { Eye, EyeOff, LogIn } from 'lucide-react';
 
+// Force dynamic rendering to avoid build-time errors
+export const dynamic = 'force-dynamic';
+
 // 1. Tách toàn bộ logic Form ra thành một Component con
 function LoginForm() {
     const router = useRouter();
