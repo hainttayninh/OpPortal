@@ -15,6 +15,7 @@ import {
     Settings,
     ChevronLeft,
     ChevronRight,
+    Activity,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAuthStore } from '@/store/auth-store';
@@ -29,9 +30,11 @@ interface NavItem {
 
 const navItems: NavItem[] = [
     { title: 'Dashboard', href: '/dashboard', icon: LayoutDashboard },
+    { title: 'Điều phối vận hành', href: '/operations', icon: Activity, roles: ['Admin', 'Manager', 'Leader'] },
     { title: 'Người dùng', href: '/users', icon: Users, roles: ['Admin', 'Manager'] },
     { title: 'Tổ chức', href: '/organization', icon: Building2, roles: ['Admin', 'Manager'] },
     { title: 'Ca làm việc', href: '/shifts', icon: Calendar },
+    { title: 'Lịch làm việc', href: '/schedule', icon: Calendar, roles: ['Admin', 'Manager', 'Leader'] },
     { title: 'Chấm công', href: '/attendance', icon: ClipboardCheck },
     { title: 'KPI', href: '/kpi', icon: Target },
     { title: 'Phê duyệt', href: '/approvals', icon: CheckSquare, roles: ['Admin', 'Manager', 'Leader'] },

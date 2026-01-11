@@ -95,7 +95,8 @@ export default function ApprovalsClient() {
             const response = await fetch(`/api/approvals?${params}`);
             if (response.ok) {
                 const data = await response.json();
-                setRequests(data.requests);
+                // API returns 'approvals' property
+                setRequests(data.approvals || []);
             }
         } catch (error) {
             console.error('Failed to fetch requests:', error);

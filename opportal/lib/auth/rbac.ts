@@ -280,24 +280,99 @@ export function canAccessUser(
 }
 
 /**
- * Get the scope filter for database queries based on user's permissions
+ * Get the scope filter for database queries based on user's role and organization
+ * - Admin: No filter (access all)
+ * - Manager: Filter to users within their TTVH (all BCVHs and BCPs under their TTVH)
+ * - Leader: Filter to users within their BCVH (including child BCPs)
+ * - User: Filter to only their own data
  */
-export function getScopeFilter(user: TokenPayload): { organizationUnitId?: string; userId?: string } {
-    const scope = user.organizationUnitType as ScopeName;
+export function getScopeFilter(user: TokenPayload): {
+    organizationUnitId?: string;
+    userId?: string;
+    role?: RoleName;
+    includeChildren?: boolean;
+} {
+    const role = user.role as RoleName;
 
-    switch (scope) {
-        case SCOPES.PERSONAL:
-            return { userId: user.userId };
-        case SCOPES.DEPARTMENT:
-        case SCOPES.BCP:
-        case SCOPES.BCVH:
-        case SCOPES.TTVH:
-            // For organization scopes, filter by org unit ID
-            // Note: The API route should handle hierarchy traversal
-            return { organizationUnitId: user.organizationUnitId };
+    switch (role) {
+        case ROLES.ADMIN:
+            // Admin has no filter - access to everything
+            return {};
+
+        case ROLES.MANAGER:
+            // Manager can access all users within their TTVH hierarchy
+            return {
+                organizationUnitId: user.organizationUnitId,
+                role: ROLES.MANAGER,
+                includeChildren: true  // Include all child units (BCVHs, BCPs, Departments)
+            };
+
+        case ROLES.LEADER:
+            // Leader can access users within their BCVH and its child BCPs
+            return {
+                organizationUnitId: user.organizationUnitId,
+                role: ROLES.LEADER,
+                includeChildren: true  // Include child BCPs
+            };
+
+        case ROLES.USER:
         default:
+            // User can only access their own data
             return { userId: user.userId };
     }
+}
+
+/**
+ * Check if a user can manage another user based on organization hierarchy
+ * - Admin: Can manage anyone
+ * - Manager: Can manage users within their TTVH
+ * - Leader: Can manage users within their BCVH and child BCPs
+ * - User: Cannot manage others
+ */
+export function canManageUser(
+    currentUser: TokenPayload,
+    targetUserOrgUnitId: string,
+    targetUserRole?: string
+): boolean {
+    const role = currentUser.role as RoleName;
+
+    // Admin can manage anyone
+    if (role === ROLES.ADMIN) {
+        return true;
+    }
+
+    // Users cannot manage others
+    if (role === ROLES.USER) {
+        return false;
+    }
+
+    // Managers and Leaders need hierarchy check
+    // This will be validated properly in API routes with DB lookup
+    // For now, return true if they have the permission - actual hierarchy 
+    // check happens in the API when querying with proper org unit filtering
+    if (role === ROLES.MANAGER || role === ROLES.LEADER) {
+        // Cannot manage users with equal or higher role
+        if (targetUserRole) {
+            const targetRoleLevel = ROLE_LEVELS[targetUserRole as RoleName] ?? 999;
+            const currentRoleLevel = ROLE_LEVELS[role];
+            if (targetRoleLevel <= currentRoleLevel) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    return false;
+}
+
+/**
+ * Get list of allowed actions for a role on a specific resource
+ */
+export function getAllowedActions(role: RoleName, resource: ResourceName): ActionName[] {
+    const permissions = ROLE_PERMISSIONS[role] || [];
+    return permissions
+        .filter(p => p.resource === resource)
+        .map(p => p.action);
 }
 
 /**
@@ -312,4 +387,13 @@ export function isHigherRole(role1: RoleName, role2: RoleName): boolean {
  */
 export function getRolePermissions(role: RoleName): Permission[] {
     return ROLE_PERMISSIONS[role] || [];
+}
+
+/**
+ * Check if user can perform any action on a resource
+ */
+export function canAccessResource(user: TokenPayload, resource: ResourceName): boolean {
+    const role = user.role as RoleName;
+    const permissions = ROLE_PERMISSIONS[role] || [];
+    return permissions.some(p => p.resource === resource);
 }

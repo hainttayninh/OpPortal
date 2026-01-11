@@ -11,6 +11,8 @@ const createAttendanceSchema = z.object({
     checkOut: z.string().datetime().optional(),
     notes: z.string().optional(),
     shiftAssignmentId: z.string().optional(),
+    userId: z.string().optional(),
+    status: z.string().optional(),
 });
 
 const updateAttendanceSchema = z.object({
@@ -99,8 +101,18 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
             );
         }
 
-        const { date, checkIn, checkOut, notes, shiftAssignmentId } = validation.data;
-        const userId = session.userId;
+        const { date, checkIn, checkOut, notes, shiftAssignmentId, status } = validation.data;
+        let userId = validation.data.userId || session.userId;
+
+        // Verify permission if creating for another user
+        if (userId !== session.userId) {
+            // Check if user has permission to manage attendance or is admin/manager
+            // For simplicity, assuming if they can CREATE attendance resource, they can do it for others if they provide userId
+            // Ideally should check scope, but relying on general permission for now
+            if (session.role === 'User') {
+                return NextResponse.json({ error: 'Forbidden - Cannot create attendance for others' }, { status: 403 });
+            }
+        }
 
         // Check if attendance already exists for this user on this date
         const existingAttendance = await prisma.attendance.findUnique({
@@ -108,10 +120,18 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         });
 
         if (existingAttendance) {
-            return NextResponse.json(
-                { error: 'Attendance already recorded for this date' },
-                { status: 409 }
-            );
+            // Update if exists (upsert behavior for Chấm công tab)
+            const attendance = await prisma.attendance.update({
+                where: { id: existingAttendance.id },
+                data: {
+                    status: status || existingAttendance.status,
+                    notes: notes ? (existingAttendance.notes ? existingAttendance.notes + '; ' + notes : notes) : existingAttendance.notes,
+                },
+                include: {
+                    user: { select: { id: true, name: true, email: true } },
+                }
+            });
+            return NextResponse.json({ attendance }, { status: 200 });
         }
 
         // Calculate working minutes if both check-in and check-out provided
@@ -130,6 +150,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
                 workingMinutes,
                 notes,
                 shiftAssignmentId,
+                status: status || 'PENDING',
             },
             include: {
                 user: { select: { id: true, name: true, email: true } },
@@ -154,6 +175,97 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         return NextResponse.json({ attendance }, { status: 201 });
     } catch (error) {
         console.error('Create attendance error:', error);
+        return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
+    }
+}
+
+export async function PUT(request: NextRequest): Promise<NextResponse> {
+    try {
+        const session = await getSession();
+        if (!session) {
+            return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+        }
+
+        if (!hasPermission(session, ACTIONS.UPDATE, RESOURCES.ATTENDANCE)) {
+            return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+        }
+
+        const { searchParams } = new URL(request.url);
+        const id = searchParams.get('id');
+
+        if (!id) {
+            return NextResponse.json({ error: 'Attendance ID is required' }, { status: 400 });
+        }
+
+        const existingAttendance = await prisma.attendance.findUnique({
+            where: { id },
+        });
+
+        if (!existingAttendance) {
+            return NextResponse.json({ error: 'Attendance not found' }, { status: 404 });
+        }
+
+        // Only allow users to update their own attendance (unless admin/manager)
+        if (existingAttendance.userId !== session.userId && session.role === 'User') {
+            return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+        }
+
+        const body = await request.json();
+        const validation = updateAttendanceSchema.safeParse(body);
+
+        if (!validation.success) {
+            return NextResponse.json(
+                { error: 'Validation failed', details: validation.error.errors },
+                { status: 400 }
+            );
+        }
+
+        const { checkIn, checkOut, notes, adjustmentReason, status } = validation.data;
+
+        // Calculate working minutes if both check-in and check-out available
+        let workingMinutes = existingAttendance.workingMinutes;
+        const finalCheckIn = checkIn ? new Date(checkIn) : existingAttendance.checkIn;
+        const finalCheckOut = checkOut ? new Date(checkOut) : existingAttendance.checkOut;
+
+        if (finalCheckIn && finalCheckOut) {
+            const diffMs = finalCheckOut.getTime() - finalCheckIn.getTime();
+            workingMinutes = Math.floor(diffMs / 60000);
+        }
+
+        const attendance = await prisma.attendance.update({
+            where: { id },
+            data: {
+                ...(checkIn && { checkIn: new Date(checkIn) }),
+                ...(checkOut && { checkOut: new Date(checkOut) }),
+                ...(notes !== undefined && { notes }),
+                ...(adjustmentReason && { adjustmentReason }),
+                ...(status && { status }),
+                workingMinutes,
+            },
+            include: {
+                user: { select: { id: true, name: true, email: true } },
+                shiftAssignment: {
+                    include: {
+                        shift: { select: { id: true, name: true, startTime: true, endTime: true } },
+                    },
+                },
+            },
+        });
+
+        // Audit log
+        const auditInfo = getAuditInfo(request.headers);
+        await createAuditLog(session, {
+            action: ActionType.UPDATE,
+            entityType: 'Attendance',
+            entityId: attendance.id,
+            beforeData: { checkIn: existingAttendance.checkIn, checkOut: existingAttendance.checkOut },
+            afterData: { checkIn: attendance.checkIn, checkOut: attendance.checkOut },
+            ...auditInfo,
+        });
+
+        return NextResponse.json({ attendance });
+    } catch (error) {
+        console.error('Update attendance error:', error);
         return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
     }
 }

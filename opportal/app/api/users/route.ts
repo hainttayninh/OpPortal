@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import bcrypt from 'bcryptjs';
 import { prisma } from '@/lib/prisma';
-import { getSession, hasPermission, ACTIONS, RESOURCES, getScopeFilter } from '@/lib/auth';
+import { getSession, hasPermission, ACTIONS, RESOURCES, getScopeFilter, ROLES } from '@/lib/auth';
 import { createAuditLog, getAuditInfo } from '@/lib/audit';
 import { ActionType } from '@prisma/client';
 import { z } from 'zod';
@@ -14,7 +14,29 @@ const createUserSchema = z.object({
     phone: z.string().optional(),
     roleId: z.string(),
     organizationUnitId: z.string(),
+    employeeId: z.string().optional(),
+    contractType: z.string().optional(),
 });
+
+/**
+ * Get all child organization unit IDs recursively
+ */
+async function getChildOrgUnitIds(parentId: string): Promise<string[]> {
+    const children = await prisma.organizationUnit.findMany({
+        where: { parentId, deletedAt: null },
+        select: { id: true },
+    });
+
+    const childIds = children.map(c => c.id);
+    const grandChildIds: string[] = [];
+
+    for (const child of children) {
+        const ids = await getChildOrgUnitIds(child.id);
+        grandChildIds.push(...ids);
+    }
+
+    return [...childIds, ...grandChildIds];
+}
 
 export async function GET(request: NextRequest): Promise<NextResponse> {
     try {
@@ -34,18 +56,44 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
         const roleId = searchParams.get('roleId');
         const organizationUnitId = searchParams.get('organizationUnitId');
         const status = searchParams.get('status');
+        const excludeAdmin = searchParams.get('excludeAdmin') === 'true';
 
-        // Build where clause based on scope
+        // Build where clause based on role-based scope
         const scopeFilter = getScopeFilter(session);
+        let orgUnitFilter: { organizationUnitId?: string | { in: string[] } } = {};
+
+        // Handle organization filtering based on role
+        if (scopeFilter.userId) {
+            // User role: only see themselves
+            orgUnitFilter = {};
+        } else if (scopeFilter.organizationUnitId && scopeFilter.includeChildren) {
+            // Manager or Leader: get all child org units
+            const childIds = await getChildOrgUnitIds(scopeFilter.organizationUnitId);
+            const allOrgUnitIds = [scopeFilter.organizationUnitId, ...childIds];
+
+            // If specific org unit requested, verify it's within scope
+            if (organizationUnitId) {
+                if (allOrgUnitIds.includes(organizationUnitId)) {
+                    orgUnitFilter = { organizationUnitId };
+                } else {
+                    return NextResponse.json({ error: 'Forbidden - Organization unit not in scope' }, { status: 403 });
+                }
+            } else {
+                orgUnitFilter = { organizationUnitId: { in: allOrgUnitIds } };
+            }
+        } else if (organizationUnitId) {
+            // Admin with specific org unit filter
+            orgUnitFilter = { organizationUnitId };
+        }
+        // Admin without filter: no org unit restriction
+
         const where = {
             deletedAt: null,
             ...(scopeFilter.userId ? { id: scopeFilter.userId } : {}),
-            ...(scopeFilter.organizationUnitId && !organizationUnitId
-                ? { organizationUnitId: scopeFilter.organizationUnitId }
-                : {}),
-            ...(organizationUnitId ? { organizationUnitId } : {}),
+            ...orgUnitFilter,
             ...(roleId ? { roleId } : {}),
             ...(status ? { status: status as 'ACTIVE' | 'INACTIVE' | 'SUSPENDED' } : {}),
+            ...(excludeAdmin ? { NOT: { username: 'admin' } } : {}),
             ...(search
                 ? {
                     OR: [
@@ -110,7 +158,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
             );
         }
 
-        const { email, username, password, name, phone, roleId, organizationUnitId } = validation.data;
+        const { email, username, password, name, phone, roleId, organizationUnitId, employeeId, contractType } = validation.data;
 
         // Check if email or username already exists
         const existingUser = await prisma.user.findFirst({
@@ -140,6 +188,8 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
                 phone,
                 roleId,
                 organizationUnitId,
+                employeeId: employeeId || null,
+                contractType: contractType || null,
             },
             include: {
                 role: { select: { id: true, name: true } },

@@ -21,6 +21,7 @@ import {
     SelectItem,
     SelectTrigger,
     SelectValue,
+    useConfirmDialog,
     type Column,
 } from '@/components/ui';
 import { Clock, Plus, Edit, Trash2, Users } from 'lucide-react';
@@ -46,6 +47,7 @@ interface OrgUnit {
 }
 
 export default function ShiftsClient() {
+    const { confirm, DialogComponent } = useConfirmDialog();
     const [shifts, setShifts] = React.useState<Shift[]>([]);
     const [orgUnits, setOrgUnits] = React.useState<OrgUnit[]>([]);
     const [loading, setLoading] = React.useState(true);
@@ -135,7 +137,15 @@ export default function ShiftsClient() {
     };
 
     const handleDelete = async (shift: Shift) => {
-        if (!confirm(`Xác nhận xóa ca làm việc ${shift.name}?`)) return;
+        const confirmed = await confirm({
+            title: 'Xác nhận xóa ca làm việc',
+            description: `Bạn có chắc chắn muốn xóa ca làm việc "${shift.name}"? Hành động này không thể hoàn tác.`,
+            variant: 'danger',
+            confirmText: 'Xóa',
+            cancelText: 'Hủy',
+        });
+
+        if (!confirmed) return;
 
         try {
             const response = await fetch(`/api/shifts?id=${shift.id}`, { method: 'DELETE' });
@@ -379,6 +389,9 @@ export default function ShiftsClient() {
                     </DialogFooter>
                 </DialogContent>
             </Dialog>
+
+            {/* Confirm Dialog */}
+            {DialogComponent}
         </MainLayout>
     );
 }

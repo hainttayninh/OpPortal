@@ -20,11 +20,14 @@ enum UserStatus {
   SUSPENDED
 }
 
+// OrganizationType enum is still used for backward compatibility
+// New types are stored in OrganizationTypeConfig table
 enum OrganizationType {
   TTVH        // Top-level operation center
   BCVH        // Belongs to TTVH
   BCP         // Belongs to BCVH
   DEPARTMENT  // Belongs to BCVH or BCP
+  CUSTOM      // Custom type - lookup in OrganizationTypeConfig
 }
 
 enum ShiftStatus {
@@ -90,6 +93,8 @@ model User {
   name                String
   phone               String?
   avatar              String?
+  employeeId          String?             @unique // Mã HRM
+  contractType        String?             // Loại HĐ: HĐLĐ, HĐTK, CTV
   status              UserStatus          @default(ACTIVE)
   
   // Role relationship
@@ -113,11 +118,38 @@ model User {
   approvalsMade       ApprovalRequest[]   @relation("Approver")
   approvalsRequested  ApprovalRequest[]   @relation("Requester")
   auditLogs           AuditLog[]
+  userPermissions     UserPermission[]    @relation("UserPermissions")
+  permissionsGranted  UserPermission[]    @relation("GrantedBy")
   
   @@index([email])
   @@index([organizationUnitId])
   @@index([roleId])
   @@map("users")
+}
+
+// Individual user permissions (beyond role-based permissions)
+model UserPermission {
+  id          String      @id @default(cuid())
+  userId      String
+  user        User        @relation("UserPermissions", fields: [userId], references: [id], onDelete: Cascade)
+  
+  action      String      // View, Create, Update, Delete, Approve, Lock
+  resource    String      // Users, Attendance, KPI, Shifts, etc.
+  
+  // Who granted this permission
+  grantedById String
+  grantedBy   User        @relation("GrantedBy", fields: [grantedById], references: [id])
+  grantedAt   DateTime    @default(now())
+  
+  // Optional expiration for temporary permissions
+  expiresAt   DateTime?
+  
+  // Notes
+  reason      String?
+  
+  @@unique([userId, action, resource])
+  @@index([userId])
+  @@map("user_permissions")
 }
 
 model Role {
@@ -171,6 +203,26 @@ model RolePermission {
 // ORGANIZATION HIERARCHY
 // ============================================
 
+// Dynamic OrganizationType configuration - allows users to add custom types
+model OrganizationTypeConfig {
+  id          String   @id @default(cuid())
+  code        String   @unique       // Short code like "TTKD", "BCGH"
+  name        String                 // Full name like "Trung tâm Kinh doanh"
+  description String?
+  level       Int      @default(0)   // Hierarchy level: 0=root, 1=child of root, etc.
+  color       String   @default("bg-slate-100 text-slate-700")  // CSS classes for UI
+  icon        String?                // Optional icon name
+  isSystem    Boolean  @default(false)  // True for built-in types (TTVH, BCVH...)
+  isActive    Boolean  @default(true)
+  
+  // Timestamps & Soft Delete
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  deletedAt   DateTime?
+  
+  @@map("organization_type_configs")
+}
+
 model OrganizationUnit {
   id          String            @id @default(cuid())
   code        String            @unique
@@ -178,6 +230,8 @@ model OrganizationUnit {
   type        OrganizationType
   address     String?
   phone       String?
+  latitude    Float?            // GPS Latitude
+  longitude   Float?            // GPS Longitude
   
   // Parent relationship (for hierarchy)
   parentId    String?

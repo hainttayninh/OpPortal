@@ -25,3 +25,5 @@ export {
     SelectSeparator,
 } from './Select';
 export { Table, Pagination, type Column } from './Table';
+export { ConfirmDialog, useConfirmDialog, type ConfirmDialogProps } from './ConfirmDialog';
+

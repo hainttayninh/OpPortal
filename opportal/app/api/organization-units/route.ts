@@ -12,7 +12,11 @@ const createOrgUnitSchema = z.object({
     parentId: z.string().optional().nullable(),
     address: z.string().optional(),
     phone: z.string().optional(),
+    latitude: z.number().optional().nullable(),
+    longitude: z.number().optional().nullable(),
 });
+
+const updateOrgUnitSchema = createOrgUnitSchema.partial();
 
 export async function GET(request: NextRequest): Promise<NextResponse> {
     try {
@@ -52,8 +56,22 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
 
         if (tree) {
             // Return hierarchical tree structure
+            // Admin sees all, others see filtered
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            let treeWhere: any = { deletedAt: null };
+
+            if (session.role !== 'Admin' && scopeFilter.organizationUnitId) {
+                treeWhere = {
+                    ...treeWhere,
+                    OR: [
+                        { id: scopeFilter.organizationUnitId },
+                        { parentId: scopeFilter.organizationUnitId },
+                    ],
+                };
+            }
+
             const allUnits = await prisma.organizationUnit.findMany({
-                where: { deletedAt: null },
+                where: session.role === 'Admin' ? { deletedAt: null } : treeWhere,
                 include: {
                     parent: { select: { id: true, code: true, name: true, type: true } },
                     _count: { select: { children: true, users: true } },
@@ -77,7 +95,17 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
 
         const units = await prisma.organizationUnit.findMany({
             where,
-            include: {
+            select: {
+                id: true,
+                code: true,
+                name: true,
+                type: true,
+                parentId: true,
+                latitude: true,
+                longitude: true,
+                address: true,
+                phone: true,
+                createdAt: true,
                 parent: { select: { id: true, code: true, name: true, type: true } },
                 _count: { select: { children: true, users: true } },
             },
@@ -112,7 +140,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
             );
         }
 
-        const { code, name, type, parentId, address, phone } = validation.data;
+        const { code, name, type, parentId, address, phone, latitude, longitude } = validation.data;
 
         // Check if code already exists
         const existingUnit = await prisma.organizationUnit.findFirst({
@@ -149,7 +177,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         }
 
         const unit = await prisma.organizationUnit.create({
-            data: { code, name, type, parentId, address, phone },
+            data: { code, name, type, parentId, address, phone, latitude, longitude },
             include: {
                 parent: { select: { id: true, code: true, name: true, type: true } },
             },
@@ -171,3 +199,155 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
     }
 }
+
+export async function PUT(request: NextRequest): Promise<NextResponse> {
+    try {
+        const session = await getSession();
+        if (!session) {
+            return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+        }
+
+        if (!hasPermission(session, ACTIONS.UPDATE, RESOURCES.ORGANIZATION_UNITS)) {
+            return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+        }
+
+        const { searchParams } = new URL(request.url);
+        const id = searchParams.get('id');
+
+        if (!id) {
+            return NextResponse.json({ error: 'Organization unit ID is required' }, { status: 400 });
+        }
+
+        const existingUnit = await prisma.organizationUnit.findUnique({
+            where: { id, deletedAt: null },
+        });
+
+        if (!existingUnit) {
+            return NextResponse.json({ error: 'Organization unit not found' }, { status: 404 });
+        }
+
+        const body = await request.json();
+        const validation = updateOrgUnitSchema.safeParse(body);
+
+        if (!validation.success) {
+            return NextResponse.json(
+                { error: 'Validation failed', details: validation.error.errors },
+                { status: 400 }
+            );
+        }
+
+        const { code, name, type, parentId, address, phone, latitude, longitude } = validation.data;
+
+        // Check if code already exists (if changing)
+        if (code && code !== existingUnit.code) {
+            const codeExists = await prisma.organizationUnit.findFirst({
+                where: { code, deletedAt: null, id: { not: id } },
+            });
+            if (codeExists) {
+                return NextResponse.json({ error: 'Organization code already exists' }, { status: 409 });
+            }
+        }
+
+        const unit = await prisma.organizationUnit.update({
+            where: { id },
+            data: {
+                ...(code && { code }),
+                ...(name && { name }),
+                ...(type && { type }),
+                ...(parentId !== undefined && { parentId }),
+                ...(address !== undefined && { address }),
+                ...(phone !== undefined && { phone }),
+                ...(latitude !== undefined && { latitude }),
+                ...(longitude !== undefined && { longitude }),
+            },
+            include: {
+                parent: { select: { id: true, code: true, name: true, type: true } },
+                _count: { select: { children: true, users: true } },
+            },
+        });
+
+        // Audit log
+        const auditInfo = getAuditInfo(request.headers);
+        await createAuditLog(session, {
+            action: ActionType.UPDATE,
+            entityType: 'OrganizationUnit',
+            entityId: unit.id,
+            beforeData: { code: existingUnit.code, name: existingUnit.name },
+            afterData: { code: unit.code, name: unit.name },
+            ...auditInfo,
+        });
+
+        return NextResponse.json({ organizationUnit: unit });
+    } catch (error) {
+        console.error('Update organization unit error:', error);
+        return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
+    }
+}
+
+export async function DELETE(request: NextRequest): Promise<NextResponse> {
+    try {
+        const session = await getSession();
+        if (!session) {
+            return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+        }
+
+        if (!hasPermission(session, ACTIONS.DELETE, RESOURCES.ORGANIZATION_UNITS)) {
+            return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+        }
+
+        const { searchParams } = new URL(request.url);
+        const id = searchParams.get('id');
+
+        if (!id) {
+            return NextResponse.json({ error: 'Organization unit ID is required' }, { status: 400 });
+        }
+
+        const unit = await prisma.organizationUnit.findUnique({
+            where: { id, deletedAt: null },
+            include: {
+                _count: { select: { children: true, users: true } },
+            },
+        });
+
+        if (!unit) {
+            return NextResponse.json({ error: 'Organization unit not found' }, { status: 404 });
+        }
+
+        // Check if has children or users
+        if (unit._count.children > 0) {
+            return NextResponse.json(
+                { error: 'Cannot delete organization unit with child units' },
+                { status: 400 }
+            );
+        }
+
+        if (unit._count.users > 0) {
+            return NextResponse.json(
+                { error: 'Cannot delete organization unit with assigned users' },
+                { status: 400 }
+            );
+        }
+
+        // Soft delete
+        await prisma.organizationUnit.update({
+            where: { id },
+            data: { deletedAt: new Date() },
+        });
+
+        // Audit log
+        const auditInfo = getAuditInfo(request.headers);
+        await createAuditLog(session, {
+            action: ActionType.DELETE,
+            entityType: 'OrganizationUnit',
+            entityId: id,
+            beforeData: { code: unit.code, name: unit.name },
+            ...auditInfo,
+        });
+
+        return NextResponse.json({ success: true });
+    } catch (error) {
+        console.error('Delete organization unit error:', error);
+        return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
+    }
+}
+

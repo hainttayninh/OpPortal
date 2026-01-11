@@ -21,6 +21,7 @@ import {
     SelectItem,
     SelectTrigger,
     SelectValue,
+    useConfirmDialog,
     type Column,
 } from '@/components/ui';
 import { Target, Plus, Edit, Trash2, TrendingUp, Calendar, AlertCircle } from 'lucide-react';
@@ -60,6 +61,7 @@ const PERIOD_LABELS: Record<string, string> = {
 };
 
 export default function KPIClient() {
+    const { confirm, DialogComponent } = useConfirmDialog();
     const [kpis, setKpis] = React.useState<KPI[]>([]);
     const [loading, setLoading] = React.useState(true);
     const [dialogOpen, setDialogOpen] = React.useState(false);
@@ -167,7 +169,15 @@ export default function KPIClient() {
     };
 
     const handleDelete = async (kpi: KPI) => {
-        if (!confirm(`Xác nhận xóa KPI "${kpi.title}"?`)) return;
+        const confirmed = await confirm({
+            title: 'Xác nhận xóa KPI',
+            description: `Bạn có chắc chắn muốn xóa KPI "${kpi.title}"? Hành động này không thể hoàn tác.`,
+            variant: 'danger',
+            confirmText: 'Xóa',
+            cancelText: 'Hủy',
+        });
+
+        if (!confirmed) return;
 
         try {
             const response = await fetch(`/api/kpi?id=${kpi.id}`, { method: 'DELETE' });
@@ -507,6 +517,9 @@ export default function KPIClient() {
                     </DialogFooter>
                 </DialogContent>
             </Dialog>
+
+            {/* Confirm Dialog */}
+            {DialogComponent}
         </MainLayout>
     );
 }

@@ -15,6 +15,8 @@ const updateUserSchema = z.object({
     roleId: z.string().optional(),
     organizationUnitId: z.string().optional(),
     status: z.enum(['ACTIVE', 'INACTIVE', 'SUSPENDED']).optional(),
+    employeeId: z.string().optional(),
+    contractType: z.string().optional(),
 });
 
 export async function GET(
@@ -87,8 +89,10 @@ export async function PUT(
             return NextResponse.json({ error: 'User not found' }, { status: 404 });
         }
 
-        // Prepare update data
+        // Prepare update data and handle empty strings for optional unique fields
         const updateData: Record<string, unknown> = { ...validation.data };
+        if (updateData.employeeId === '') updateData.employeeId = null;
+        if (updateData.contractType === '') updateData.contractType = null;
 
         // Hash password if provided
         if (updateData.password) {
